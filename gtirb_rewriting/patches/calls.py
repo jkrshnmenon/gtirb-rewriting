@@ -188,7 +188,11 @@ class _CallPatchX86(_CallPatchImpl):
             if isinstance(arg_value, gtirb.Symbol):
                 file_format = insertion_context.module.file_format
                 if file_format == gtirb.Module.FileFormat.ELF:
-                    arg_str = f"{arg_value.name}[rip]"
+                    isa = insertion_context.module.isa
+                    if isa == gtirb.Module.ISA.IA32:
+                        arg_str = arg_value.name
+                    elif isa == gtirb.Module.ISA.X64:
+                        arg_str = f"{arg_value.name}[rip]"
                 elif file_format == gtirb.Module.FileFormat.PE:
                     arg_str = arg_value.name
                 else:
