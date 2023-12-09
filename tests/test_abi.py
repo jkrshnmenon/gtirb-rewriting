@@ -31,7 +31,7 @@ def stringify_snippets(snippets):
 
 @pytest.mark.parametrize(
     "abi_class",
-    (gtirb_rewriting.abi._IA32_PE,),
+    (gtirb_rewriting.abi._IA32_PE, gtirb_rewriting.abi._IA32_ELF),
 )
 def test_ia32_clobbers_regs(abi_class):
     abi = abi_class()
@@ -60,7 +60,7 @@ def test_ia32_clobbers_regs(abi_class):
 
 @pytest.mark.parametrize(
     "abi_class",
-    (gtirb_rewriting.abi._IA32_PE,),
+    (gtirb_rewriting.abi._IA32_PE, gtirb_rewriting.abi._IA32_ELF),
 )
 def test_ia32_align_stack(abi_class):
     abi = abi_class()
@@ -90,7 +90,10 @@ def test_ia32_align_stack(abi_class):
     )
 
 
-@pytest.mark.parametrize("abi_class", (gtirb_rewriting.abi._IA32_PE,))
+@pytest.mark.parametrize(
+    "abi_class",
+    (gtirb_rewriting.abi._IA32_PE, gtirb_rewriting.abi._IA32_ELF),
+)
 def test_ia32_clobbers_flags(abi_class):
     abi = abi_class()
     constraints = gtirb_rewriting.Constraints(clobbers_flags=True)
@@ -385,6 +388,7 @@ def test_arm64_scratch_regs():
     "abi_class,skip_for_scratch",
     [
         (gtirb_rewriting.abi._IA32_PE, ("eax", "ebx")),
+        (gtirb_rewriting.abi._IA32_ELF, ("eax", "ebx")),
         (gtirb_rewriting.abi._X86_64_ELF, ("rax", "rbx")),
         (gtirb_rewriting.abi._ARM64_ELF, ("x0", "x1")),
     ],
