@@ -353,6 +353,22 @@ class _IA32_PE(_IA32):
         return "L"
 
 
+class _IA32_ELF(_IA32):
+    def caller_saved_registers(self) ->  Set[Register]:
+        return {self.get_register(name) for name in ("EAX", "ECX", "EDX")}
+
+    def calling_convention(self) -> CallingConventionDesc:
+        return CallingConventionDesc(
+            registers=(),
+            stack_alignment=4,
+            caller_cleanup=True,
+            shadow_space=0,
+        )
+
+    def temporary_label_prefix(self) -> str:
+        return "L"
+
+
 class _X86_64(ABI):
     def _create_prologue_and_epilogue(
         self,
@@ -653,5 +669,6 @@ _ABIS: Dict[Tuple[gtirb.Module.ISA, gtirb.Module.FileFormat], ABI] = {
     (gtirb.Module.ISA.X64, gtirb.Module.FileFormat.PE): _X86_64_PE(),
     (gtirb.Module.ISA.X64, gtirb.Module.FileFormat.ELF): _X86_64_ELF(),
     (gtirb.Module.ISA.IA32, gtirb.Module.FileFormat.PE): _IA32_PE(),
+    (gtirb.Module.ISA.IA32, gtirb.Module.FileFormat.ELF): _IA32_ELF(),
     (gtirb.Module.ISA.ARM64, gtirb.Module.FileFormat.ELF): _ARM64_ELF(),
 }
