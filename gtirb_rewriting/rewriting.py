@@ -48,14 +48,15 @@ import gtirb_rewriting._auxdata_offsetmap as _auxdata_offsetmap
 from gtirb_capstone.instructions import GtirbInstructionDecoder
 from intervaltree import IntervalTree
 
+from ._modify import (
+    ModifyCache,
+    delete,
+    insert,
+    make_return_cache,
+    retarget_symbols,
+)
 from .abi import ABI
 from .assembler import AsmSyntaxError, Assembler
-from .modify import (
-    _delete,
-    _make_return_cache,
-    _modify_block_insert,
-    _ModifyCache,
-)
 from .patch import InsertionContext, Patch
 from .prepare import prepare_for_rewriting
 from .scopes import Scope, _SpecificLocationScope
@@ -254,6 +255,7 @@ class RewritingContext:
         self._modifications = _ModificationStore()
         self._modification_id = itertools.count()
         self._function_insertions: List[_FunctionInsertion] = []
+        self._symbol_retargets: Dict[gtirb.Symbol, gtirb.Symbol] = {}
         self._logger = logger
         self._patch_id = 0
         self._expensive_assertions = expensive_assertions
@@ -502,7 +504,7 @@ class RewritingContext:
 
     def _insert_assembler_result(
         self,
-        modify_cache: _ModifyCache,
+        modify_cache: ModifyCache,
         block: gtirb.ByteBlock,
         offset: int,
         replacement_length: int,
@@ -526,7 +528,7 @@ class RewritingContext:
         """
 
         with self._log_patch_changes(patch, block, offset):
-            new_end = _modify_block_insert(
+            new_end = insert(
                 modify_cache,
                 block,
                 offset,
@@ -539,6 +541,28 @@ class RewritingContext:
             new_end,
             len(assembler_result.text_section.data),
         )
+
+    def retarget_symbol_uses(
+        self, old_symbol: gtirb.Symbol, new_symbol: gtirb.Symbol
+    ) -> None:
+        """
+        Updates symbolic expressions that refer to one symbol to refer to
+        another symbol and updates control flow accordingly.
+        """
+
+        if old_symbol.module is not self._module:
+            raise ValueError("old symbol is not part of this module")
+
+        if new_symbol.module is not self._module:
+            raise ValueError("new symbol is not part of this module")
+
+        if old_symbol in self._symbol_retargets:
+            raise ValueError("old symbol has already been retargeted")
+
+        if new_symbol.referent is None:
+            raise ValueError("new symbol must have a referent")
+
+        self._symbol_retargets[old_symbol] = new_symbol
 
     def get_or_insert_extern_symbol(
         self,
@@ -615,7 +639,7 @@ class RewritingContext:
 
     def _apply_modifications(
         self,
-        modify_cache: _ModifyCache,
+        modify_cache: ModifyCache,
         modifications: Sequence[_Modification],
         func: Optional[gtirb_functions.Function],
         block: gtirb.ByteBlock,
@@ -671,7 +695,7 @@ class RewritingContext:
                     insert_len - modification.scope._replacement_length()
                 )
             elif isinstance(modification, _Deletion):
-                actual_block = _delete(
+                actual_block = delete(
                     modify_cache,
                     actual_block,
                     actual_offset,
@@ -684,7 +708,7 @@ class RewritingContext:
 
     def _insert_function_stub(
         self,
-        modify_cache: _ModifyCache,
+        modify_cache: ModifyCache,
         sym: gtirb.Symbol,
         block: gtirb.CodeBlock,
     ) -> None:
@@ -749,7 +773,7 @@ class RewritingContext:
 
     def _apply_function_insertion(
         self,
-        modify_cache: _ModifyCache,
+        modify_cache: ModifyCache,
         sym: gtirb.Symbol,
         block: gtirb.CodeBlock,
         patch: Patch,
@@ -1072,8 +1096,8 @@ class RewritingContext:
 
         with prepare_for_rewriting(
             self._module, self._abi.nop()
-        ), _make_return_cache(self._module.ir) as return_cache:
-            modify_cache = _ModifyCache(
+        ), make_return_cache(self._module.ir) as return_cache:
+            modify_cache = ModifyCache(
                 self._module, self._functions, return_cache
             )
 
@@ -1081,6 +1105,11 @@ class RewritingContext:
             sorted_blocks = sorted(
                 self._module.byte_blocks, key=lambda b: b.address or 0
             )
+
+            if self._symbol_retargets:
+                retarget_symbols(
+                    self._module, self._symbol_retargets, self._decoder
+                )
 
             for func in self._function_insertions:
                 self._insert_function_stub(

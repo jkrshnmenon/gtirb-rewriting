@@ -1,5 +1,5 @@
 # GTIRB-Rewriting Rewriting API for GTIRB
-# Copyright (C) 2021 GrammaTech, Inc.
+# Copyright (C) 2023 GrammaTech, Inc.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,5 +19,37 @@
 # N68335-17-C-0700.  The content of the information does not necessarily
 # reflect the position or policy of the Government and no official
 # endorsement should be inferred.
-__version__ = "0.3.0.dev"
-__packagename__ = "gtirb-rewriting"
+
+from .cache import (
+    CFGModifiedError,
+    ModifyCache,
+    ReturnEdgeCache,
+    make_return_cache,
+)
+from .edit import (
+    AmbiguousCFGError,
+    AmbiguousIRError,
+    delete,
+    edit_byte_interval,
+    insert,
+)
+from .join import UnjoinableBlocksError, are_joinable, join_blocks
+from .retarget import retarget_symbols
+from .split import split_block
+
+__all__ = [
+    "ModifyCache",
+    "make_return_cache",
+    "insert",
+    "delete",
+    "split_block",
+    "are_joinable",
+    "join_blocks",
+    "AmbiguousCFGError",
+    "AmbiguousIRError",
+    "UnjoinableBlocksError",
+    "CFGModifiedError",
+    "ReturnEdgeCache",
+    "edit_byte_interval",
+    "retarget_symbols",
+]
