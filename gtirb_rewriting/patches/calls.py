@@ -222,6 +222,102 @@ class _CallPatchX86(_CallPatchImpl):
         return "\n".join(lines)
 
 
+class _CallPatchARM(_CallPatchImpl):
+    """
+    Inserts a call to a function with literal arguments.
+    """
+
+    def __init__(
+        self,
+        sym: gtirb.Symbol,
+        args: Iterable["CallPatch.ArgumentValue"],
+        conv: CallingConventionDesc,
+        **constraint_kwargs,
+    ):
+        if conv.shadow_space:
+            raise ValueError("shadow_space does not apply to ARM")
+        if conv.stack_alignment != 8:
+            raise ValueError("ARM stack alignment should be 8")
+
+        self._sym = sym
+        self._args = self._create_passed_args(conv, args)
+        self._cconv = conv
+
+        clobbered_registers = {arg.reg for arg in self._args if arg.reg}
+        clobbered_registers.add("r14")
+
+        uses_stack = any(True for arg in self._args if not arg.reg)
+        if uses_stack:
+            clobbered_registers.add("r0")
+
+        self.constraints = Constraints(
+            clobbers_flags=True,
+            clobbers_registers=clobbered_registers,
+            preserve_caller_saved_registers=True,
+        )
+        self.constraints = dataclasses.replace(
+            self.constraints, **constraint_kwargs
+        )
+
+    def _load_immediate(self, reg: str, value: int) -> Iterator[str]:
+        """
+        Load an immediate into a register.
+        """
+        if -0xFF <= value <= 0xFF:
+            yield f"mov {reg}, #0x{value:x}"
+            return
+        else:
+            yield f"ldr {reg}, =0x{value:x}"
+            return
+
+    def _load_symbol(self, reg: str, sym: gtirb.Symbol) -> Iterator[str]:
+        """
+        Load a symbol into a register.
+        """
+        raise NotImplementedError
+
+    def get_asm(self, insertion_context: InsertionContext) -> str:
+        lines = []
+
+        [*stack_args], [*reg_args] = more_itertools.partition(
+            lambda arg: arg.reg, reversed(self._args)
+        )
+
+        stack_adjustment = align_address(
+            len(stack_args) * 4, self._cconv.stack_alignment
+        )
+        if stack_adjustment:
+            lines.append(f"sub sp, sp, #{stack_adjustment}")
+
+        # Deal with stack values first because we have to use a register to
+        # get the value onto the stack.
+        for i, arg in enumerate(stack_args):
+            arg_value = self._actual_value(arg, insertion_context)
+            temp_reg = "r0"
+            if isinstance(arg_value, gtirb.Symbol):
+                lines.extend(self._load_symbol(temp_reg, arg_value))
+            elif isinstance(arg_value, int):
+                lines.extend(self._load_immediate(temp_reg, arg_value))
+
+            slot = (len(stack_args) - i - 1) * 4
+            lines.append(f"str {temp_reg}, [sp, #{slot}]")
+
+        for arg in reg_args:
+            assert arg.reg
+
+            arg_value = self._actual_value(arg, insertion_context)
+            if isinstance(arg_value, gtirb.Symbol):
+                lines.extend(self._load_symbol(arg.reg, arg_value))
+            elif isinstance(arg_value, int):
+                lines.extend(self._load_immediate(arg.reg, arg_value))
+
+        lines.append(f"bl {self._sym.name}")
+
+        if stack_adjustment:
+            lines.append(f"add sp, sp, #{stack_adjustment}")
+
+        return "\n".join(lines)
+
 class _CallPatchARM64(_CallPatchImpl):
     """
     Inserts a call to a function with literal arguments.
