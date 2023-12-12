@@ -637,6 +637,117 @@ class _X86_64_ELF(_X86_64):
             )
 
 
+class _ARM_ELF(ABI):
+    def _create_prologue_and_epilogue(
+            self,
+            constraints: Constraints,
+            register_use: _PatchRegisterAllocation,
+            is_leaf_function: bool
+     ) -> Tuple[Iterable[_AsmSnippet], Iterable[_AsmSnippet], int | None]:
+        prologue: List[_AsmSnippet] = []
+        epilogue: List[_AsmSnippet] = []
+        stack_adjustment = 0
+
+        if constraints.align_stack:
+            logging.getLogger(__name__).info(
+                "align_stack is unneccessary for ARM"
+            )
+
+        flags_reg = None
+        if constraints.clobbers_flags:
+            # ARM can't move the flags directly onto the stack, so we need
+            # to have a register for this
+            if register_use.scratch_registers:
+                flags_reg = register_use.scratch_registers[0]
+            else:
+                flags_reg = register_use.available_registers.pop(0)
+                register_use.clobbered_registers.append(flags_reg)
+
+        # ARM 32-bit supports the STMFD and LDMFD instructions
+        # We can use these to store and load multiple registers onto the
+        # stack in a single instruction
+        reg_set = ",".join(x for x in register_use.clobbered_registers)[:-1]
+
+        prologue.append(_AsmSnippet(f"stmfd sp, {{{reg_set}}}"))
+        epilogue.append(_AsmSnippet(f"ldmfd sp, {{{reg_set}}}"))
+
+        stack_adjustment += len(register_use.clobbered_registers)
+
+        if constraints.clobbers_flags:
+            assert flags_reg is not None
+
+            prologue.append(
+                _AsmSnippet(
+                    f"""
+                    mrs {flags_reg}, cpsr
+                    push {flags_reg} 
+                    """
+                )
+            )
+
+            epilogue.append(
+                _AsmSnippet(
+                    f"""
+                    pop {flags_reg}
+                    msr cpsr, {flags_reg}
+                    """
+                )
+            )
+
+            stack_adjustment += 4
+
+        return prologue, reversed(epilogue), stack_adjustment
+
+    def _inclusive_range(self, start: int, end: int) -> Iterable[int]:
+        return range(start, end + 1)
+
+    def _scratch_registers(self) -> List[Register]:
+        return [
+            reg
+            for reg in self.all_registers()
+            if reg.name not in ("r13", "r14", "r15")
+        ]
+
+    def all_registers(self) -> List[Register]:
+        results = [
+            Register({"32": f"r{i}"}, "32")
+            for i in self._inclusive_range(0, 12)
+        ]
+        results.append(Register({"32": "r13", "": "sp"}, "32"))
+        results.append(Register({"32": "r14", "": "lr"}, "32"))
+        results.append(Register({"32": "r15", "": "pc"}, "32"))
+        return results
+
+    def nop(self) -> bytes:
+        return b"\x00\xf0\x20\xe3"
+
+    def caller_saved_registers(self) -> Set[Register]:
+        results = {
+            self.get_register(f"r{i}") for i in self._inclusive_range(0, 3)
+        }
+        # Intra-procedure-call scratch register
+        results.add(self.get_register("r12"))
+        results.add(self.get_register("r14"))
+        return results
+
+    def pointer_size(self) -> int:
+        return 4
+
+    def calling_convention(self) -> CallingConventionDesc:
+        return CallingConventionDesc(
+            registers=("r0", "r1", "r2", "r3"),
+            stack_alignment=8,
+            caller_cleanup=True,
+            shadow_space=0
+        )
+
+    def stack_register(self) -> Register:
+        return Register({"32": "sp"}, "64")
+
+    def temporary_label_prefix(self) -> str:
+        return ".L"
+
+
 class _ARM64_ELF(ABI):
     def _create_prologue_and_epilogue(
         self,
@@ -785,5 +896,6 @@ _ABIS: Dict[Tuple[gtirb.Module.ISA, gtirb.Module.FileFormat], ABI] = {
     (gtirb.Module.ISA.X64, gtirb.Module.FileFormat.ELF): _X86_64_ELF(),
     (gtirb.Module.ISA.IA32, gtirb.Module.FileFormat.PE): _IA32_PE(),
     (gtirb.Module.ISA.IA32, gtirb.Module.FileFormat.ELF): _IA32_ELF(),
+    (gtirb.Module.ISA.ARM, gtirb.Module.FileFormat.ELF): _ARM_ELF(),
     (gtirb.Module.ISA.ARM64, gtirb.Module.FileFormat.ELF): _ARM64_ELF(),
 }
