@@ -71,6 +71,8 @@ class CallPatch(Patch):
             self._imp = _CallPatchX86(sym, args, conv, **constraint_kwargs)
         elif sym.module.isa == gtirb.Module.ISA.ARM64:
             self._imp = _CallPatchARM64(sym, args, conv, **constraint_kwargs)
+        elif sym.module.isa == gtirb.Module.ISA.ARM:
+            self._imp = _CallPatchARM(sym, args, conv, **constraint_kwargs)
 
         self.sym = sym
         super().__init__(self._imp.constraints)
@@ -274,24 +276,31 @@ class _CallPatchARM(_CallPatchImpl):
         """
         Load a symbol into a register.
         """
-        raise NotImplementedError
+        yield f"ldr {reg}, ={sym.name}"
 
     def get_asm(self, insertion_context: InsertionContext) -> str:
         lines = []
 
-        [*stack_args], [*reg_args] = more_itertools.partition(
-            lambda arg: arg.reg, reversed(self._args)
-        )
+        stack_slot_size = self._abi.pointer_size()
 
-        stack_adjustment = align_address(
-            len(stack_args) * 4, self._cconv.stack_alignment
+        arg_stack_size = sum(
+            stack_slot_size for arg in self._args if not arg.reg
+        )
+        if insertion_context.stack_adjustment is not None:
+            total_stack_size = (
+                insertion_context.stack_adjustment + arg_stack_size
+            )
+        else:
+            total_stack_size = arg_stack_size
+
+        stack_adjustment = (
+            align_address(total_stack_size, self._cconv.stack_alignment)
+            - total_stack_size
         )
         if stack_adjustment:
             lines.append(f"sub sp, sp, #{stack_adjustment}")
 
-        # Deal with stack values first because we have to use a register to
-        # get the value onto the stack.
-        for i, arg in enumerate(stack_args):
+        for arg in reversed(self._args):
             arg_value = self._actual_value(arg, insertion_context)
             temp_reg = "r0"
             if isinstance(arg_value, gtirb.Symbol):
@@ -299,22 +308,16 @@ class _CallPatchARM(_CallPatchImpl):
             elif isinstance(arg_value, int):
                 lines.extend(self._load_immediate(temp_reg, arg_value))
 
-            slot = (len(stack_args) - i - 1) * 4
-            lines.append(f"str {temp_reg}, [sp, #{slot}]")
-
-        for arg in reg_args:
-            assert arg.reg
-
-            arg_value = self._actual_value(arg, insertion_context)
-            if isinstance(arg_value, gtirb.Symbol):
-                lines.extend(self._load_symbol(arg.reg, arg_value))
-            elif isinstance(arg_value, int):
-                lines.extend(self._load_immediate(arg.reg, arg_value))
+            lines.append(f"stmfd sp!, {{{temp_reg}}}")
 
         lines.append(f"bl {self._sym.name}")
 
-        if stack_adjustment:
-            lines.append(f"add sp, sp, #{stack_adjustment}")
+        cleanup_size = self._cconv.shadow_space + stack_adjustment
+        if self._cconv.caller_cleanup:
+            cleanup_size += arg_stack_size
+
+        if cleanup_size:
+            lines.append(f"add sp, sp, #{cleanup_size}")
 
         return "\n".join(lines)
 
